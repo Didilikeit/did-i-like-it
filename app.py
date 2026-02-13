@@ -1,57 +1,64 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-from streamlit_google_auth import Authenticate
 import pandas as pd
 from datetime import date
+from streamlit_gsheets import GSheetsConnection
+from google_auth_oauthlib.flow import Flow
+from google.auth.transport.requests import Request
+import os
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
-# --- 2. GOOGLE AUTH ---
-# Changed 'secret_token' to 'secret_key' to fix the TypeError
-# --- 2. GOOGLE AUTH ---
-# We pass the secrets directly in the order the library expects:
-# (client_id, client_secret, redirect_uri, cookie_name, cookie_expiry_days, secret_key)
-auth = Authenticate(
-    st.secrets["google_oauth"]["client_id"],
-    st.secrets["google_oauth"]["client_secret"],
-    st.secrets["google_oauth"]["redirect_uri"],
-    st.secrets["google_oauth"]["cookie_name"],
-    30,
-    "personal_vault_token"
-)
-# Identify the Admin from Secrets
+# --- 2. OFFICIAL GOOGLE LOGIN LOGIC ---
+def login_user():
+    # Configure the Google Flow using your Secrets
+    client_config = {
+        "web": {
+            "client_id": st.secrets["google_oauth"]["client_id"],
+            "client_secret": st.secrets["google_oauth"]["client_secret"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [st.secrets["google_oauth"]["redirect_uri"]]
+        }
+    }
+    
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=["openid", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"],
+        redirect_uri=st.secrets["google_oauth"]["redirect_uri"]
+    )
+
+    # Check if we are returning from Google Login
+    query_params = st.query_params
+    if "code" in query_params:
+        flow.fetch_token(code=query_params["code"])
+        session = flow.authorized_session()
+        user_info = session.get("https://www.googleapis.com/oauth2/v1/userinfo").json()
+        st.session_state.user = user_info
+        st.query_params.clear()
+        st.rerun()
+
+    # If not logged in, show login button
+    if "user" not in st.session_state:
+        st.title("🤔 Did I Like It?")
+        auth_url, _ = flow.authorization_url(prompt="consent")
+        st.link_button("Login with Google", auth_url)
+        st.stop()
+
+login_user()
+
+# --- 3. LOGGED IN DATA ---
+user_email = st.session_state.user.get("email").lower()
+user_name = st.session_state.user.get("name")
 ADMIN_EMAIL = st.secrets.get("admin_user", "").lower()
 
-# Check if user is already logged in
-auth.check_authenticity()
-
-if not st.session_state.get("connected"):
-    st.title("🤔 Did I Like It?")
-    st.write("Please sign in with Google to access your private vault.")
-    auth.login()
-    st.stop()
-
-# Get current user info
-user_email = st.session_state["user_info"].get("email").lower()
-user_name = st.session_state["user_info"].get("name")
-
-# --- 3. DATABASE CONNECTION ---
+# Database Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
+all_data = conn.read(ttl="0s")
 
-def get_data():
-    try:
-        df = conn.read(ttl="0s")
-        if df is None:
-            return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
-        if "User" not in df.columns:
-            df["User"] = ""
-        return df
-    except:
-        return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
+if all_data is None:
+    all_data = pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
-all_data = get_data()
-# Privacy Filter: Only shows rows belonging to the logged-in user
 user_data = all_data[all_data["User"] == user_email].copy()
 
 # --- 4. NAVIGATION ---
@@ -60,76 +67,47 @@ if user_email == ADMIN_EMAIL:
     menu.append("Admin Dashboard")
 
 choice = st.sidebar.selectbox("Menu", menu)
-st.sidebar.divider()
-st.sidebar.write(f"Logged in: **{user_email}**")
+st.sidebar.write(f"Logged in as: **{user_email}**")
 if st.sidebar.button("Log Out"):
-    auth.logout()
+    del st.session_state.user
     st.rerun()
 
-# --- 5. PAGE: ADD ENTRY ---
+# --- 5. INTERFACE ---
 if choice == "Add Entry":
-    st.title("➕ Add to my Log")
+    st.header("➕ Add New Entry")
     with st.form("add_form", clear_on_submit=True):
         t = st.text_input("Title")
         m = st.selectbox("Type", ["Movie", "Book", "Album"])
-        c = st.text_input("Director / Author / Artist")
+        c = st.text_input("Director / Artist")
         g = st.text_input("Genre")
-        y = st.number_input("Year Released", 1800, 2100, 2026)
-        d = st.date_input("Date Logged", date.today())
+        y = st.number_input("Year", 1800, 2026, 2026)
         l = st.selectbox("Did I like it?", ["Yes", "No", "Kind of"])
-        th = st.text_area("Final Thoughts")
+        th = st.text_area("Thoughts")
         
-        if st.form_submit_button("Save to Vault"):
+        if st.form_submit_button("Save"):
             if t:
-                new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
-                                       columns=all_data.columns)
+                new_row = pd.DataFrame([[user_email, t, c, m, g, y, date.today(), l, th]], columns=all_data.columns)
                 updated_df = pd.concat([all_data, new_row], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success("Successfully saved!")
+                st.success("Saved!")
                 st.rerun()
-            else:
-                st.error("Please enter a Title.")
 
-# --- 6. PAGE: MY LOG ---
 elif choice == "My Log":
-    st.title(f"🤔 {user_name}'s Private Log")
-    
+    st.header(f"🎬 {user_name}'s Private Log")
     if user_data.empty:
-        st.info("Your log is empty. Use 'Add Entry' in the menu to start!")
+        st.info("Empty! Add something in the sidebar.")
     else:
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Entries", len(user_data))
-        m2.metric("Movies", len(user_data[user_data['Type'] == "Movie"]))
-        m3.metric("Books", len(user_data[user_data['Type'] == "Book"]))
-        m4.metric("Albums", len(user_data[user_data['Type'] == "Album"]))
-
-        st.divider()
-        search = st.text_input("🔍 Search your collection...")
-        display_df = user_data.iloc[::-1]
-        
-        if search:
-            display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
-
-        for i, row in display_df.iterrows():
+        for i, row in user_data.iloc[::-1].iterrows():
             with st.container(border=True):
-                h, del_col = st.columns([8, 1])
-                icon = "🎬" if row['Type'] == "Movie" else "📖" if row['Type'] == "Book" else "🎵"
-                h.subheader(f"{icon} {row['Title']} ({row['Year Released']})")
-                st.write(f"**By:** {row['Creator']} | **Genre:** {row['Genre']} | **Liked?** {row['Did I Like It?']}")
-                st.write(f"*{row['Thoughts']}*")
-                
-                if del_col.button("🗑️", key=f"del_{i}"):
-                    master_updated = all_data.drop(i)
-                    conn.update(data=master_updated)
+                colA, colB = st.columns([7, 1])
+                colA.subheader(f"{row['Title']} ({row['Year Released']})")
+                colA.write(f"**By:** {row['Creator']} | **Liked?** {row['Did I Like It?']}")
+                colA.write(f"*{row['Thoughts']}*")
+                if colB.button("🗑️", key=f"del_{i}"):
+                    conn.update(data=all_data.drop(i))
                     st.rerun()
 
-# --- 7. PAGE: ADMIN DASHBOARD ---
 elif choice == "Admin Dashboard":
-    st.title("🛡️ Admin Overview")
-    col1, col2 = st.columns(2)
-    col1.metric("Unique Users", all_data['User'].nunique() if not all_data.empty else 0)
-    col2.metric("Total Rows", len(all_data))
-    
-    if not all_data.empty:
-        st.subheader("Entry Count per User")
-        st.bar_chart(all_data['User'].value_counts())
+    st.header("📊 Admin Overview")
+    st.write(f"Unique Users: {all_data['User'].nunique()}")
+    st.bar_chart(all_data['User'].value_counts())
