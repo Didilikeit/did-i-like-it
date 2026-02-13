@@ -8,22 +8,20 @@ from datetime import date
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
 # --- 2. GOOGLE AUTH ---
-# This pulls everything from your Secrets. 
-# Ensure [google_oauth] section exists in your Streamlit Secrets!
-# --- 2. GOOGLE AUTH ---
+# Changed 'secret_token' to 'secret_key' to fix the TypeError
 auth = Authenticate(
-    secret_token="personal_vault_token", 
+    secret_key="personal_vault_token", 
     client_id=st.secrets["google_oauth"]["client_id"],
     client_secret=st.secrets["google_oauth"]["client_secret"],
     redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
     cookie_name=st.secrets["google_oauth"]["cookie_name"],
-    cookie_expiry_days=30
+    cookie_expiry_days=30 
 )
 
 # Identify the Admin from Secrets
 ADMIN_EMAIL = st.secrets.get("admin_user", "").lower()
 
-# Check if the user is already logged in via cookie
+# Check if user is already logged in
 auth.check_authenticity()
 
 if not st.session_state.get("connected"):
@@ -51,7 +49,7 @@ def get_data():
         return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
 all_data = get_data()
-# The Privacy Filter: Only shows rows belonging to the logged-in user
+# Privacy Filter: Only shows rows belonging to the logged-in user
 user_data = all_data[all_data["User"] == user_email].copy()
 
 # --- 4. NAVIGATION ---
@@ -81,12 +79,11 @@ if choice == "Add Entry":
         
         if st.form_submit_button("Save to Vault"):
             if t:
-                # Add to the master database
                 new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
                                        columns=all_data.columns)
                 updated_df = pd.concat([all_data, new_row], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success("Successfully saved to your private log!")
+                st.success("Successfully saved!")
                 st.rerun()
             else:
                 st.error("Please enter a Title.")
@@ -98,7 +95,6 @@ elif choice == "My Log":
     if user_data.empty:
         st.info("Your log is empty. Use 'Add Entry' in the menu to start!")
     else:
-        # User Statistics
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Entries", len(user_data))
         m2.metric("Movies", len(user_data[user_data['Type'] == "Movie"]))
@@ -107,7 +103,7 @@ elif choice == "My Log":
 
         st.divider()
         search = st.text_input("🔍 Search your collection...")
-        display_df = user_data.iloc[::-1] # Show newest entries first
+        display_df = user_data.iloc[::-1]
         
         if search:
             display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
@@ -120,7 +116,6 @@ elif choice == "My Log":
                 st.write(f"**By:** {row['Creator']} | **Genre:** {row['Genre']} | **Liked?** {row['Did I Like It?']}")
                 st.write(f"*{row['Thoughts']}*")
                 
-                # Deleting the row by its original index in the master sheet
                 if del_col.button("🗑️", key=f"del_{i}"):
                     master_updated = all_data.drop(i)
                     conn.update(data=master_updated)
@@ -129,11 +124,9 @@ elif choice == "My Log":
 # --- 7. PAGE: ADMIN DASHBOARD ---
 elif choice == "Admin Dashboard":
     st.title("🛡️ Admin Overview")
-    st.write("Usage statistics for the 'Did I Like It?' app.")
-    
     col1, col2 = st.columns(2)
-    col1.metric("Unique Users", all_data['User'].nunique())
-    col2.metric("Total Rows in Sheet", len(all_data))
+    col1.metric("Unique Users", all_data['User'].nunique() if not all_data.empty else 0)
+    col2.metric("Total Rows", len(all_data))
     
     if not all_data.empty:
         st.subheader("Entry Count per User")
