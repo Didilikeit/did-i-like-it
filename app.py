@@ -1,39 +1,26 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-from streamlit_google_auth import Authenticate
+from streamlit_google_oauth import login
 import pandas as pd
 from datetime import date
 
 # --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
-# --- 2. GOOGLE AUTHENTICATION ---
-auth = Authenticate(
-    secret_token="any_random_string", 
+# --- 2. GOOGLE LOGIN ---
+# This looks at your Secrets for client_id and client_secret
+user_info = login(
     client_id=st.secrets["google_oauth"]["client_id"],
     client_secret=st.secrets["google_oauth"]["client_secret"],
     redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
-    cookie_name=st.secrets["google_oauth"]["cookie_name"],
 )
 
-# This checks if the user is already logged in via Gmail
-auth.check_authenticity()
-
-if not st.session_state.get("connected"):
-    # If not logged in, show the Google Login button
+if not user_info:
     st.title("🤔 Did I Like It?")
-    st.write("Welcome! Please sign in with your Google account to manage your private logs.")
-    auth.login()
+    st.write("Welcome! Please sign in with Google to view your private list.")
 else:
-    # --- LOGGED IN AREA ---
-    user_email = st.session_state["user_info"].get("email")
-    user_name = st.session_state["user_info"].get("name")
-
-    # Sidebar Logout
-    with st.sidebar:
-        st.write(f"Logged in as: **{user_name}**")
-        if st.button("Log out"):
-            auth.logout()
+    user_email = user_info.get("email")
+    user_name = user_info.get("name")
 
     # --- 3. DATABASE CONNECTION ---
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -46,11 +33,12 @@ else:
             return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
     all_data = load_data()
-    # Filter only for THIS Gmail user
+    # Filter for the logged-in Gmail
     user_data = all_data[all_data["User"] == user_email].copy()
 
-    # --- 4. HEADER & STATS ---
+    # --- 4. HEADER & INTERFACE ---
     st.title(f"🤔 {user_name}'s Log")
+    st.sidebar.write(f"Logged in as: {user_email}")
     
     if not user_data.empty:
         m1, m2, m3, m4 = st.columns(4)
@@ -58,9 +46,7 @@ else:
         m2.metric("Movies", len(user_data[user_data['Type'] == "Movie"]))
         m3.metric("Books", len(user_data[user_data['Type'] == "Book"]))
         m4.metric("Albums", len(user_data[user_data['Type'] == "Album"]))
-    else:
-        st.info("Your log is empty. Add your first entry in the sidebar!")
-
+    
     st.divider()
 
     # --- 5. SIDEBAR: ADD ENTRY ---
@@ -78,7 +64,6 @@ else:
             
             if st.form_submit_button("Save to Cloud"):
                 if t:
-                    # We save the Gmail address as the "User"
                     new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
                                            columns=all_data.columns)
                     updated_df = pd.concat([all_data, new_row], ignore_index=True)
