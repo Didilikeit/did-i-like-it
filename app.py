@@ -17,36 +17,43 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. AUTHENTICATION ---
-# This looks for usernames/passwords in your "Secrets" on the hosting site
+# --- 2. AUTHENTICATION SETUP ---
 if "credentials" in st.secrets:
     config = st.secrets["credentials"]
 else:
-    # Fallback for local testing (until you set up cloud secrets)
+    # Fallback for local testing
     config = {
         "usernames": {
             "amarindercooner@gmail.com": {"name": "Amarinder", "password": "temp_password_123"}
         }
     }
 
+# Convert nested dictionary to dots/attribute access as required by the library
 authenticator = stauth.Authenticate(
-    config,
+    dict(config),
     "did_i_like_it_cookie",
     "signature_key",
     cookie_expiry_days=30
 )
 
-name, authentication_status, username = authenticator.login(location="main")
+# --- 3. LOGIN LOGIC ---
+authenticator.login(location="main")
 
-if authentication_status == False:
+if st.session_state["authentication_status"] == False:
     st.error("Username/password is incorrect")
-elif authentication_status == None:
+elif st.session_state["authentication_status"] == None:
     st.warning("Please enter your username and password")
-elif authentication_status:
-    # --- LOGGED IN USER AREA ---
-    authenticator.logout("Logout", "sidebar")
+elif st.session_state["authentication_status"]:
     
-    # --- 3. DATABASE CONNECTION ---
+    # Get user info from session state
+    name = st.session_state["name"]
+    username = st.session_state["username"]
+
+    # --- LOGOUT BUTTON ---
+    authenticator.logout("Logout", "sidebar")
+    st.sidebar.write(f"Welcome, **{name}**!")
+
+    # --- 4. DATABASE CONNECTION ---
     conn = st.connection("gsheets", type=GSheetsConnection)
 
     def load_data():
@@ -59,9 +66,10 @@ elif authentication_status:
             return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
     all_data = load_data()
+    # Filter for the logged-in user
     user_data = all_data[all_data["User"] == username].copy()
 
-    # --- 4. HEADER & STATS ---
+    # --- 5. HEADER & STATS ---
     st.title(f"🤔 {name}'s Log")
     
     if not user_data.empty:
@@ -75,7 +83,7 @@ elif authentication_status:
 
     st.divider()
 
-    # --- 5. SIDEBAR: ADD ENTRY ---
+    # --- 6. SIDEBAR: ADD ENTRY ---
     with st.sidebar:
         st.header("➕ Add New Entry")
         with st.form("add_form", clear_on_submit=True):
@@ -97,10 +105,10 @@ elif authentication_status:
                     st.success("Saved!")
                     st.rerun()
 
-    # --- 6. DISPLAY CARDS ---
+    # --- 7. DISPLAY CARDS ---
     if not user_data.empty:
         search = st.text_input("🔍 Search entries...")
-        display_df = user_data.iloc[::-1] # Newest first
+        display_df = user_data.iloc[::-1] # Show newest first
         
         if search:
             display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
@@ -117,16 +125,10 @@ elif authentication_status:
                 rating = row['Did I Like It?']
                 cc.write(f"**Liked?** {'🟢' if rating=='Yes' else '🔴' if rating=='No' else '🟡'} {rating}")
                 
-                # Medium specific date label
-                pretty_date = row['Date Finished']
-                if row['Type'] == "Movie": label = f"🎥 Watched on {pretty_date}"
-                elif row['Type'] == "Book": label = f"📑 Finished reading on {pretty_date}"
-                else: label = f"🎧 Listened on {pretty_date}"
-                
-                st.caption(label)
                 st.write(f"*{row['Thoughts']}*")
 
                 if del_col.button("🗑️", key=f"del_{i}"):
+                    # Drop from the main master dataframe
                     all_data = all_data.drop(i)
                     conn.update(data=all_data)
                     st.rerun()
