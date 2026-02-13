@@ -8,12 +8,14 @@ from datetime import date
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
 # --- 2. GOOGLE AUTH ---
+# cookie_expiry_days is required to prevent the TypeError
 auth = Authenticate(
     secret_token="personal_vault_token", 
     client_id=st.secrets["google_oauth"]["client_id"],
     client_secret=st.secrets["google_oauth"]["client_secret"],
     redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
     cookie_name="google_auth_cookie",
+    cookie_expiry_days=30 
 )
 
 # Pulls the admin email from your hidden Secrets
@@ -36,16 +38,15 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_data():
     try:
         df = conn.read(ttl="0s")
-        # Ensure 'User' column exists for filtering
         if "User" not in df.columns:
+            # Create the column if it's a brand new sheet
             df["User"] = ""
         return df
     except:
-        # Fallback if the sheet is totally empty or missing
         return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
 all_data = get_data()
-# The Privacy Shield: Only keep rows belonging to the current user
+# Filter for only THIS user's data
 user_data = all_data[all_data["User"] == user_email].copy()
 
 # --- 4. NAVIGATION ---
@@ -58,6 +59,7 @@ st.sidebar.divider()
 st.sidebar.write(f"Logged in: **{user_email}**")
 if st.sidebar.button("Log Out"):
     auth.logout()
+    st.rerun()
 
 # --- 5. PAGE: ADD ENTRY ---
 if choice == "Add Entry":
@@ -81,6 +83,8 @@ if choice == "Add Entry":
                 conn.update(data=updated_df)
                 st.success("Saved! Check 'My Log' to see it.")
                 st.rerun()
+            else:
+                st.warning("Please provide a Title.")
 
 # --- 6. PAGE: MY LOG ---
 elif choice == "My Log":
@@ -89,7 +93,6 @@ elif choice == "My Log":
     if user_data.empty:
         st.info("Your log is empty. Go to 'Add Entry' to start your collection!")
     else:
-        # User Stats
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Your Total", len(user_data))
         m2.metric("Movies", len(user_data[user_data['Type'] == "Movie"]))
@@ -97,8 +100,37 @@ elif choice == "My Log":
         m4.metric("Albums", len(user_data[user_data['Type'] == "Album"]))
 
         st.divider()
-        search = st.text_input("🔍 Search your entries...")
-        display_df = user_data.iloc[::-1] # Show newest entries first
+        search = st.text_input("🔍 Search my entries...")
+        display_df = user_data.iloc[::-1]
         
         if search:
-            display_df = display_df
+            display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
+
+        for i, row in display_df.iterrows():
+            with st.container(border=True):
+                h, del_col = st.columns([8, 1])
+                icon = "🎬" if row['Type'] == "Movie" else "📖" if row['Type'] == "Book" else "🎵"
+                h.subheader(f"{icon} {row['Title']} ({row['Year Released']})")
+                st.write(f"**By:** {row['Creator']} | **Genre:** {row['Genre']} | **Liked?** {row['Did I Like It?']}")
+                st.write(f"*{row['Thoughts']}*")
+                if del_col.button("🗑️", key=f"del_{i}"):
+                    # Drop by the original index in all_data
+                    updated_all = all_data.drop(i)
+                    conn.update(data=updated_all)
+                    st.rerun()
+
+# --- 7. PAGE: ADMIN ---
+elif choice == "Admin Dashboard":
+    st.title("🛡️ Admin Overview")
+    st.info("Only you can see this page. Other users' specific logs remain hidden.")
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Unique Users", all_data['User'].nunique())
+    col2.metric("Total Database Rows", len(all_data))
+    
+    st.subheader("Usage by User")
+    if not all_data.empty:
+        user_counts = all_data['User'].value_counts()
+        st.bar_chart(user_counts)
+    else:
+        st.write("No data available yet.")
