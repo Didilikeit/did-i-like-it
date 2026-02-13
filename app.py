@@ -4,40 +4,38 @@ from streamlit_google_auth import Authenticate
 import pandas as pd
 from datetime import date
 
-# --- 1. CONFIG ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
 # --- 2. GOOGLE AUTH ---
-# We use a try/except block here so if the library version changes, 
-# the app gives us a clear hint instead of just crashing.
-try:
-    auth = Authenticate(
-        secret_token="personal_vault_token", 
-        client_id=st.secrets["google_oauth"]["client_id"],
-        client_secret=st.secrets["google_oauth"]["client_secret"],
-        redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
-        cookie_name="google_auth_cookie",
-        cookie_expiry_days=30 
-    )
-except Exception as e:
-    st.error("Authentication setup failed. Check your Secrets.")
-    st.stop()
+# This pulls everything from your Secrets. 
+# Ensure [google_oauth] section exists in your Streamlit Secrets!
+auth = Authenticate(
+    secret_token="personal_vault_token", 
+    client_id=st.secrets["google_oauth"]["client_id"],
+    client_secret=st.secrets["google_oauth"]["client_secret"],
+    redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
+    cookie_name=st.secrets["google_oauth"]["cookie_name"],
+    cookie_expiry_days=30 
+)
 
-# Pulls the admin email from your hidden Secrets
+# Identify the Admin from Secrets
 ADMIN_EMAIL = st.secrets.get("admin_user", "").lower()
 
+# Check if the user is already logged in via cookie
 auth.check_authenticity()
 
 if not st.session_state.get("connected"):
     st.title("🤔 Did I Like It?")
-    st.write("Please sign in with Google to access your private log.")
+    st.write("Please sign in with Google to access your private vault.")
     auth.login()
     st.stop()
 
+# Get current user info
 user_email = st.session_state["user_info"].get("email").lower()
 user_name = st.session_state["user_info"].get("name")
 
-# --- 3. DATABASE ---
+# --- 3. DATABASE CONNECTION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def get_data():
@@ -52,6 +50,7 @@ def get_data():
         return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
 all_data = get_data()
+# The Privacy Filter: Only shows rows belonging to the logged-in user
 user_data = all_data[all_data["User"] == user_email].copy()
 
 # --- 4. NAVIGATION ---
@@ -81,29 +80,33 @@ if choice == "Add Entry":
         
         if st.form_submit_button("Save to Vault"):
             if t:
+                # Add to the master database
                 new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
                                        columns=all_data.columns)
                 updated_df = pd.concat([all_data, new_row], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success("Saved!")
+                st.success("Successfully saved to your private log!")
                 st.rerun()
+            else:
+                st.error("Please enter a Title.")
 
 # --- 6. PAGE: MY LOG ---
 elif choice == "My Log":
     st.title(f"🤔 {user_name}'s Private Log")
     
     if user_data.empty:
-        st.info("Your log is empty. Go to 'Add Entry' to start your collection!")
+        st.info("Your log is empty. Use 'Add Entry' in the menu to start!")
     else:
+        # User Statistics
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Your Total", len(user_data))
+        m1.metric("Total Entries", len(user_data))
         m2.metric("Movies", len(user_data[user_data['Type'] == "Movie"]))
         m3.metric("Books", len(user_data[user_data['Type'] == "Book"]))
         m4.metric("Albums", len(user_data[user_data['Type'] == "Album"]))
 
         st.divider()
-        search = st.text_input("🔍 Search your entries...")
-        display_df = user_data.iloc[::-1]
+        search = st.text_input("🔍 Search your collection...")
+        display_df = user_data.iloc[::-1] # Show newest entries first
         
         if search:
             display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
@@ -115,18 +118,22 @@ elif choice == "My Log":
                 h.subheader(f"{icon} {row['Title']} ({row['Year Released']})")
                 st.write(f"**By:** {row['Creator']} | **Genre:** {row['Genre']} | **Liked?** {row['Did I Like It?']}")
                 st.write(f"*{row['Thoughts']}*")
+                
+                # Deleting the row by its original index in the master sheet
                 if del_col.button("🗑️", key=f"del_{i}"):
-                    # Logic to delete from master sheet
-                    # Note: Using index i here works because user_data is a copy with original indices
-                    master_to_update = all_data.drop(i)
-                    conn.update(data=master_to_update)
+                    master_updated = all_data.drop(i)
+                    conn.update(data=master_updated)
                     st.rerun()
 
-# --- 7. PAGE: ADMIN ---
+# --- 7. PAGE: ADMIN DASHBOARD ---
 elif choice == "Admin Dashboard":
     st.title("🛡️ Admin Overview")
+    st.write("Usage statistics for the 'Did I Like It?' app.")
+    
     col1, col2 = st.columns(2)
     col1.metric("Unique Users", all_data['User'].nunique())
-    col2.metric("Total Rows", len(all_data))
+    col2.metric("Total Rows in Sheet", len(all_data))
+    
     if not all_data.empty:
+        st.subheader("Entry Count per User")
         st.bar_chart(all_data['User'].value_counts())
