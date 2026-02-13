@@ -8,15 +8,20 @@ from datetime import date
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
 # --- 2. GOOGLE AUTH ---
-# cookie_expiry_days is required to prevent the TypeError
-auth = Authenticate(
-    secret_token="personal_vault_token", 
-    client_id=st.secrets["google_oauth"]["client_id"],
-    client_secret=st.secrets["google_oauth"]["client_secret"],
-    redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
-    cookie_name="google_auth_cookie",
-    cookie_expiry_days=30 
-)
+# We use a try/except block here so if the library version changes, 
+# the app gives us a clear hint instead of just crashing.
+try:
+    auth = Authenticate(
+        secret_token="personal_vault_token", 
+        client_id=st.secrets["google_oauth"]["client_id"],
+        client_secret=st.secrets["google_oauth"]["client_secret"],
+        redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
+        cookie_name="google_auth_cookie",
+        cookie_expiry_days=30 
+    )
+except Exception as e:
+    st.error("Authentication setup failed. Check your Secrets.")
+    st.stop()
 
 # Pulls the admin email from your hidden Secrets
 ADMIN_EMAIL = st.secrets.get("admin_user", "").lower()
@@ -38,15 +43,15 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def get_data():
     try:
         df = conn.read(ttl="0s")
+        if df is None:
+            return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
         if "User" not in df.columns:
-            # Create the column if it's a brand new sheet
             df["User"] = ""
         return df
     except:
         return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
 all_data = get_data()
-# Filter for only THIS user's data
 user_data = all_data[all_data["User"] == user_email].copy()
 
 # --- 4. NAVIGATION ---
@@ -76,15 +81,12 @@ if choice == "Add Entry":
         
         if st.form_submit_button("Save to Vault"):
             if t:
-                # Append new data to the master sheet
                 new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
                                        columns=all_data.columns)
                 updated_df = pd.concat([all_data, new_row], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success("Saved! Check 'My Log' to see it.")
+                st.success("Saved!")
                 st.rerun()
-            else:
-                st.warning("Please provide a Title.")
 
 # --- 6. PAGE: MY LOG ---
 elif choice == "My Log":
@@ -100,7 +102,7 @@ elif choice == "My Log":
         m4.metric("Albums", len(user_data[user_data['Type'] == "Album"]))
 
         st.divider()
-        search = st.text_input("🔍 Search my entries...")
+        search = st.text_input("🔍 Search your entries...")
         display_df = user_data.iloc[::-1]
         
         if search:
@@ -114,23 +116,17 @@ elif choice == "My Log":
                 st.write(f"**By:** {row['Creator']} | **Genre:** {row['Genre']} | **Liked?** {row['Did I Like It?']}")
                 st.write(f"*{row['Thoughts']}*")
                 if del_col.button("🗑️", key=f"del_{i}"):
-                    # Drop by the original index in all_data
-                    updated_all = all_data.drop(i)
-                    conn.update(data=updated_all)
+                    # Logic to delete from master sheet
+                    # Note: Using index i here works because user_data is a copy with original indices
+                    master_to_update = all_data.drop(i)
+                    conn.update(data=master_to_update)
                     st.rerun()
 
 # --- 7. PAGE: ADMIN ---
 elif choice == "Admin Dashboard":
     st.title("🛡️ Admin Overview")
-    st.info("Only you can see this page. Other users' specific logs remain hidden.")
-    
     col1, col2 = st.columns(2)
     col1.metric("Unique Users", all_data['User'].nunique())
-    col2.metric("Total Database Rows", len(all_data))
-    
-    st.subheader("Usage by User")
+    col2.metric("Total Rows", len(all_data))
     if not all_data.empty:
-        user_counts = all_data['User'].value_counts()
-        st.bar_chart(user_counts)
-    else:
-        st.write("No data available yet.")
+        st.bar_chart(all_data['User'].value_counts())
