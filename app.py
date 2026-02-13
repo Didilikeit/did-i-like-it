@@ -1,76 +1,56 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+from streamlit_google_auth import Authenticate
 import pandas as pd
 from datetime import date
-import streamlit_authenticator as stauth
 
-# --- 1. PAGE CONFIG & STYLE ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Did I Like It?", layout="wide")
 
-st.markdown("""
-    <style>
-    [data-testid="stAppViewContainer"] { background-color: #0e1117; color: #ffffff; }
-    [data-testid="stHeader"] { background: rgba(0,0,0,0); }
-    [data-testid="stMetricValue"] { color: #ffffff !important; }
-    [data-testid="stMetricLabel"] { color: #ffffff !important; }
-    .stButton>button { width: 100%; border-radius: 5px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. AUTHENTICATION SETUP ---
-if "credentials" in st.secrets:
-    config = st.secrets["credentials"]
-else:
-    # Fallback for local testing
-    config = {
-        "usernames": {
-            "amarindercooner@gmail.com": {"name": "Amarinder", "password": "temp_password_123"}
-        }
-    }
-
-# Convert nested dictionary to dots/attribute access as required by the library
-authenticator = stauth.Authenticate(
-    dict(config),
-    "did_i_like_it_cookie",
-    "signature_key",
-    cookie_expiry_days=30
+# --- 2. GOOGLE AUTHENTICATION ---
+auth = Authenticate(
+    secret_token="any_random_string", 
+    client_id=st.secrets["google_oauth"]["client_id"],
+    client_secret=st.secrets["google_oauth"]["client_secret"],
+    redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
+    cookie_name=st.secrets["google_oauth"]["cookie_name"],
 )
 
-# --- 3. LOGIN LOGIC ---
-authenticator.login(location="main")
+# This checks if the user is already logged in via Gmail
+auth.check_authenticity()
 
-if st.session_state["authentication_status"] == False:
-    st.error("Username/password is incorrect")
-elif st.session_state["authentication_status"] == None:
-    st.warning("Please enter your username and password")
-elif st.session_state["authentication_status"]:
-    
-    # Get user info from session state
-    name = st.session_state["name"]
-    username = st.session_state["username"]
+if not st.session_state.get("connected"):
+    # If not logged in, show the Google Login button
+    st.title("🤔 Did I Like It?")
+    st.write("Welcome! Please sign in with your Google account to manage your private logs.")
+    auth.login()
+else:
+    # --- LOGGED IN AREA ---
+    user_email = st.session_state["user_info"].get("email")
+    user_name = st.session_state["user_info"].get("name")
 
-    # --- LOGOUT BUTTON ---
-    authenticator.logout("Logout", "sidebar")
-    st.sidebar.write(f"Welcome, **{name}**!")
+    # Sidebar Logout
+    with st.sidebar:
+        st.write(f"Logged in as: **{user_name}**")
+        if st.button("Log out"):
+            auth.logout()
 
-    # --- 4. DATABASE CONNECTION ---
+    # --- 3. DATABASE CONNECTION ---
     conn = st.connection("gsheets", type=GSheetsConnection)
 
     def load_data():
         try:
             df = conn.read(ttl="0s")
-            if "User" not in df.columns:
-                df["User"] = ""
-            return df
+            return df if "User" in df.columns else pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
         except:
             return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
     all_data = load_data()
-    # Filter for the logged-in user
-    user_data = all_data[all_data["User"] == username].copy()
+    # Filter only for THIS Gmail user
+    user_data = all_data[all_data["User"] == user_email].copy()
 
-    # --- 5. HEADER & STATS ---
-    st.title(f"🤔 {name}'s Log")
+    # --- 4. HEADER & STATS ---
+    st.title(f"🤔 {user_name}'s Log")
     
     if not user_data.empty:
         m1, m2, m3, m4 = st.columns(4)
@@ -83,7 +63,7 @@ elif st.session_state["authentication_status"]:
 
     st.divider()
 
-    # --- 6. SIDEBAR: ADD ENTRY ---
+    # --- 5. SIDEBAR: ADD ENTRY ---
     with st.sidebar:
         st.header("➕ Add New Entry")
         with st.form("add_form", clear_on_submit=True):
@@ -98,17 +78,18 @@ elif st.session_state["authentication_status"]:
             
             if st.form_submit_button("Save to Cloud"):
                 if t:
-                    new_row = pd.DataFrame([[username, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
+                    # We save the Gmail address as the "User"
+                    new_row = pd.DataFrame([[user_email, t, c, m, g, y, d.strftime('%Y-%m-%d'), l, th]], 
                                            columns=all_data.columns)
                     updated_df = pd.concat([all_data, new_row], ignore_index=True)
                     conn.update(data=updated_df)
                     st.success("Saved!")
                     st.rerun()
 
-    # --- 7. DISPLAY CARDS ---
+    # --- 6. DISPLAY CARDS ---
     if not user_data.empty:
         search = st.text_input("🔍 Search entries...")
-        display_df = user_data.iloc[::-1] # Show newest first
+        display_df = user_data.iloc[::-1]
         
         if search:
             display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
@@ -128,7 +109,6 @@ elif st.session_state["authentication_status"]:
                 st.write(f"*{row['Thoughts']}*")
 
                 if del_col.button("🗑️", key=f"del_{i}"):
-                    # Drop from the main master dataframe
                     all_data = all_data.drop(i)
                     conn.update(data=all_data)
                     st.rerun()
