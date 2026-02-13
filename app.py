@@ -10,13 +10,14 @@ st.set_page_config(page_title="Did I Like It?", layout="wide")
 # --- 2. GOOGLE AUTH ---
 # This pulls everything from your Secrets. 
 # Ensure [google_oauth] section exists in your Streamlit Secrets!
+# --- 2. GOOGLE AUTH ---
 auth = Authenticate(
     secret_token="personal_vault_token", 
     client_id=st.secrets["google_oauth"]["client_id"],
     client_secret=st.secrets["google_oauth"]["client_secret"],
     redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
     cookie_name=st.secrets["google_oauth"]["cookie_name"],
-    cookie_expiry_days=30 
+    cookie_expiry_days=30
 )
 
 # Identify the Admin from Secrets
