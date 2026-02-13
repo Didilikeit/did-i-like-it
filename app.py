@@ -9,15 +9,17 @@ st.set_page_config(page_title="Did I Like It?", layout="wide")
 
 # --- 2. GOOGLE AUTH ---
 # Changed 'secret_token' to 'secret_key' to fix the TypeError
+# --- 2. GOOGLE AUTH ---
+# We pass the secrets directly in the order the library expects:
+# (client_id, client_secret, redirect_uri, cookie_name, cookie_expiry_days, secret_key)
 auth = Authenticate(
-    secret_key="personal_vault_token", 
-    client_id=st.secrets["google_oauth"]["client_id"],
-    client_secret=st.secrets["google_oauth"]["client_secret"],
-    redirect_uri=st.secrets["google_oauth"]["redirect_uri"],
-    cookie_name=st.secrets["google_oauth"]["cookie_name"],
-    cookie_expiry_days=30 
+    st.secrets["google_oauth"]["client_id"],
+    st.secrets["google_oauth"]["client_secret"],
+    st.secrets["google_oauth"]["redirect_uri"],
+    st.secrets["google_oauth"]["cookie_name"],
+    30,
+    "personal_vault_token"
 )
-
 # Identify the Admin from Secrets
 ADMIN_EMAIL = st.secrets.get("admin_user", "").lower()
 
