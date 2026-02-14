@@ -7,18 +7,17 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="Did I Like It?", layout="wide", page_icon="🤔")
 
 # --- 2. AUTHENTICATION ---
-# This uses Streamlit's built-in auth system
+# st.login looks for the [auth] section in your secrets automatically
 if not st.experimental_user.is_logged_in:
     st.title("🤔 Did I Like It?")
-    st.write("Welcome! Log in to view or manage your personal media vault.")
+    st.write("Welcome! Log in with your Google account to access your private reviews.")
     if st.button("Log in with Google"):
         st.login("google")
     st.stop()
 
-# Get user info from the session
+# User details from the Google session
 user_email = st.experimental_user.email
 user_name = st.experimental_user.name
-# Hardcoded admin check
 ADMIN_EMAIL = "amarindercooner@gmail.com"
 
 # --- 3. DATABASE CONNECTION ---
@@ -34,26 +33,23 @@ def get_data():
         return pd.DataFrame(columns=["User", "Title", "Creator", "Type", "Genre", "Year Released", "Date Finished", "Did I Like It?", "Thoughts"])
 
 all_data = get_data()
-# Filter data so users only see their own entries
+# Filter so user only sees their own rows
 user_data = all_data[all_data["User"] == user_email.lower()].copy()
 
-# --- 4. SIDEBAR & NAVIGATION ---
-st.sidebar.title(f"Hi, {user_name}!")
-st.sidebar.write(f"📧 {user_email}")
-
+# --- 4. NAVIGATION ---
+st.sidebar.title(f"Hello, {user_name}!")
 menu = ["My Log", "Add New Entry"]
 if user_email.lower() == ADMIN_EMAIL.lower():
     menu.append("Admin Dashboard")
 
-choice = st.sidebar.radio("Navigate to:", menu)
+choice = st.sidebar.radio("Navigate", menu)
 
 if st.sidebar.button("Log Out"):
     st.logout()
 
-# --- 5. APP PAGES ---
-
+# --- 5. PAGES ---
 if choice == "Add New Entry":
-    st.header("➕ Add to your Vault")
+    st.header("➕ Add New Review")
     with st.form("entry_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -65,7 +61,7 @@ if choice == "Add New Entry":
             year = st.number_input("Year Released", 1800, 2026, 2026)
             rating = st.selectbox("Did I Like It?", ["Yes", "No", "Kind of", "Masterpiece"])
         
-        thoughts = st.text_area("Final Thoughts / Notes")
+        thoughts = st.text_area("Thoughts")
         
         if st.form_submit_button("Save Entry"):
             if title:
@@ -77,39 +73,31 @@ if choice == "Add New Entry":
                 
                 updated_df = pd.concat([all_data, new_row], ignore_index=True)
                 conn.update(data=updated_df)
-                st.success(f"Added '{title}' to your log!")
+                st.success("Saved!")
                 st.rerun()
-            else:
-                st.error("Please at least provide a Title.")
 
 elif choice == "My Log":
     st.header("📖 Your Personal Log")
     if user_data.empty:
-        st.info("Your log is empty. Head to 'Add New Entry' to start!")
+        st.info("No entries yet.")
     else:
-        search = st.text_input("🔍 Search your vault...")
-        display_df = user_data.iloc[::-1] # Newest first
+        search = st.text_input("🔍 Search...")
+        display_df = user_data.iloc[::-1]
         
         if search:
             display_df = display_df[display_df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
 
         for i, row in display_df.iterrows():
             with st.container(border=True):
-                col_main, col_del = st.columns([0.9, 0.1])
-                with col_main:
-                    st.subheader(f"{row['Title']} ({row['Year Released']})")
-                    st.write(f"**{row['Type']}** by **{row['Creator']}** — *{row['Genre']}*")
-                    st.write(f"**Liked?** {row['Did I Like It?']}")
-                    st.write(f"💬 {row['Thoughts']}")
-                with col_del:
-                    if st.button("🗑️", key=f"del_{i}"):
-                        # Find the index in the original full dataframe to delete correctly
-                        new_all_data = all_data.drop(i)
-                        conn.update(data=new_all_data)
-                        st.rerun()
+                c1, c2 = st.columns([0.9, 0.1])
+                c1.subheader(f"{row['Title']} ({row['Year Released']})")
+                c1.write(f"**{row['Type']}** | **Liked?** {row['Did I Like It?']}")
+                c1.write(f"*{row['Thoughts']}*")
+                if c2.button("🗑️", key=f"del_{i}"):
+                    conn.update(data=all_data.drop(i))
+                    st.rerun()
 
 elif choice == "Admin Dashboard":
-    st.header("📊 Global Analytics")
-    st.write(f"Total entries in database: {len(all_data)}")
-    st.write(f"Total unique users: {all_data['User'].nunique()}")
+    st.header("📊 Admin Statistics")
+    st.write(f"Total Entries: {len(all_data)}")
     st.dataframe(all_data)
